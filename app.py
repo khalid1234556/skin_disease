@@ -3,13 +3,12 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import tensorflow as tf
 import numpy as np
-from PIL import Image
-import io
-import os
+import cv2
+from io import BytesIO
 
 app = FastAPI(
     title="Skin Disease Classifier API",
-    description="Upload an image and get the predicted skin disease using a fine-tuned model.",
+    description="Upload an image and get the predicted skin disease using EfficientNet preprocessing.",
     version="1.0.0",
 )
 
@@ -18,9 +17,6 @@ MODEL_PATH = "skin_disease_finetuned.h5"
 
 # --- Load model safely
 def load_model():
-    if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
-    # Load model with compile=False to avoid optimizer issues
     model = tf.keras.models.load_model(MODEL_PATH, compile=False)
     return model
 
@@ -34,29 +30,37 @@ CONFIDENCE_THRESHOLD = 0.6
 
 @app.get("/")
 def home():
-    return {"message": "🩺 Skin Disease Classifier API is running"}
+    return {"message": "Skin Disease Classifier API is running"}
+
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     try:
-        # Read uploaded file
+        # Read uploaded file bytes
         image_bytes = await file.read()
 
-        # Open image and ensure RGB
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        # Convert bytes to numpy array for OpenCV
+        file_bytes = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image file")
 
         # Resize to model input size
-        img_resized = image.resize((224, 224))
+        img_resized = cv2.resize(img, (224, 224))
 
-        # Convert to numpy array and normalize
-        img_array = np.array(img_resized) / 255.0
+        # Convert BGR to RGB
+        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
 
-        # Ensure shape is (1, 224, 224, 3)
+        # EfficientNet preprocessing
+        img_array = tf.keras.applications.efficientnet.preprocess_input(img_rgb.astype(np.float32))
+
+        # Add batch dimension
         img_array = np.expand_dims(img_array, axis=0)
 
         # Predict
         preds = model.predict(img_array)[0]
-        predicted_class = CLASS_NAMES[np.argmax(preds)]
+        pred_class = CLASS_NAMES[np.argmax(preds)]
         confidence = float(np.max(preds))
 
         # Check confidence threshold
@@ -68,11 +72,11 @@ async def predict(file: UploadFile = File(...)):
             }
         else:
             result = {
-                "prediction": predicted_class,
+                "prediction": pred_class,
                 "confidence": round(confidence, 2)
             }
 
-        # Include probabilities for all classes
+        # Include all class probabilities
         class_probs = {name: float(prob) for name, prob in zip(CLASS_NAMES, preds)}
         result["all_probabilities"] = class_probs
 
