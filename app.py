@@ -1,4 +1,4 @@
-# main.py
+# app.py
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import tensorflow as tf
@@ -13,6 +13,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# --- Model file path
 MODEL_PATH = "skin_disease_finetuned.h5"
 
 # --- Load model safely
@@ -24,7 +25,7 @@ def load_model():
 
 model = load_model()
 
-# --- Class names (same order as training)
+# --- Class names
 CLASS_NAMES = ["Acne", "Eczema", "Keratosis Pilaris", "Psoriasis", "Warts"]
 
 # --- Confidence threshold
@@ -41,18 +42,25 @@ async def predict(file: UploadFile = File(...)):
     try:
         # Read image bytes
         image_bytes = await file.read()
+
+        # Open image and ensure RGB
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-        # Preprocess image
+        # Resize to model input size
         img_resized = image.resize((224, 224))
-        img_array = np.expand_dims(np.array(img_resized) / 255.0, axis=0)
+
+        # Convert to numpy array and normalize
+        img_array = np.array(img_resized) / 255.0
+
+        # Add batch dimension
+        img_array = np.expand_dims(img_array, axis=0)  # Shape: (1, 224, 224, 3)
 
         # Predict
         preds = model.predict(img_array)[0]
         predicted_class = CLASS_NAMES[np.argmax(preds)]
         confidence = float(np.max(preds))
 
-        # If not confident
+        # Determine result
         if confidence < CONFIDENCE_THRESHOLD:
             result = {
                 "prediction": "Unknown",
